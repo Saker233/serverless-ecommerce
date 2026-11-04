@@ -21,11 +21,13 @@ SERVICE_NAME = os.getenv("SERVICE_NAME", "user-service")
 VERSION = os.getenv("VERSION", "dev")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 USERS_TABLE = os.getenv("USERS_TABLE", "")
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID", "")
 
 INSTALLED_APPS = []
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "user_service.middleware.AuthenticationMiddleware",
 ]
 
 ROOT_URLCONF = "user_service.urls"

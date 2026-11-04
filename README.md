@@ -67,7 +67,7 @@ Services never read or write another service's DynamoDB table. Cross-service rea
 | Service | Runtime | Responsibility | Status |
 |---|---|---|---|
 | Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; Cognito-protected writes |
-| User | Python + Django | User profiles | Base scaffolded; profile CRUD planned |
+| User | Python + Django | User profiles | Profile CRUD + signup trigger |
 | Order | TypeScript + Express | Order lifecycle | Planned |
 | Inventory | TBD | Stock reservations and movements | Planned |
 | Notification | TBD | Customer notifications | Planned |
@@ -85,6 +85,7 @@ Cognito is wired into the Product API with an API Gateway JWT authorizer.
 - API Gateway validates the JWT signature, issuer, audience, and expiry.
 - Public routes: `GET /health`, `GET /products`, `GET /products/{id}`.
 - Protected routes: `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}`.
+- A Cognito `PostConfirmation` Lambda creates the User Service profile at signup. `GET /users/me` remains a lazy fallback.
 - Missing, invalid, or expired tokens return `401` before the Lambda runs.
 
 Cognito access tokens are used for API authorization. API Gateway accepts a token when its `aud` or `client_id` matches the configured app client.
@@ -250,7 +251,7 @@ No long-lived AWS access keys are stored in GitHub. The workflow exchanges a sho
 |---|---|
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
 | 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
-| 3 | Cognito authentication *(implemented)*, authorization *(deferred)*, Django User Service base *(scaffolded)*, Order Service |
+| 3 | Cognito authentication *(implemented)*, authorization *(deferred)*, Django User Service *(implemented; API deployment pending)*, Order Service |
 | 4 | EventBridge, SQS, inventory, notifications, idempotency |
 | 5 | Terraform for dev and prod, remote state, least-privilege IAM |
 | 6 | Independent pipelines for every service |
