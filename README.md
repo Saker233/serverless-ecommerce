@@ -4,7 +4,7 @@ A polyglot, event-driven e-commerce backend built on AWS serverless services.
 
 The project explores how to design, deploy, and operate independently deployable microservices using different runtimes while keeping infrastructure, security, and observability production-oriented.
 
-> **Status:** early development. Product Service CRUD, DynamoDB, and CI/CD are working. Cognito authenticates product writes at API Gateway. Authorization is intentionally deferred at this stage, and the Django User Service base has been scaffolded.
+> **Status:** early development. Product Service CRUD + DynamoDB + CI/CD and the Django User Service profile API + Cognito signup trigger + CI/CD are deployed. Cognito authenticates both APIs. Authorization is intentionally deferred at this stage.
 
 ## Goals
 
@@ -21,17 +21,21 @@ The project explores how to design, deploy, and operate independently deployable
 
 ```text
 Client
-  │  Cognito access token for product writes
+  │  Cognito access token
   ▼
-Amazon Cognito ──► API Gateway HTTP API
-                       │
-                       │  public: GET /health, GET /products, GET /products/{id}
-                       │  JWT:    POST/PUT/DELETE /products
-                       ▼
-                 Lambda: product-service
-                       │  Go + Gin
-                       ├──► DynamoDB: products
-                       └──► CloudWatch Logs
+Amazon Cognito
+  │
+  ├──► Product API Gateway HTTP API
+  │       public: GET /health, GET /products, GET /products/{id}
+  │       JWT:    POST/PUT/DELETE /products
+  │       └──► Product Lambda (Go/Gin) ──► DynamoDB: products
+  │
+  ├──► User API Gateway HTTP API
+  │       public: GET /health
+  │       JWT:    GET/PUT /users/me, GET /users/{sub}
+  │       └──► User Lambda (Django/Mangum) ──► DynamoDB: users
+  │
+  └──► PostConfirmation trigger ──► User trigger Lambda ──► DynamoDB: users
 ```
 
 ### Target
@@ -66,37 +70,39 @@ Services never read or write another service's DynamoDB table. Cross-service rea
 
 | Service | Runtime | Responsibility | Status |
 |---|---|---|---|
-| Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; Cognito-protected writes |
-| User | Python + Django | User profiles | Profile CRUD + signup trigger |
+| Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; Cognito-authenticated writes |
+| User | Python + Django | User profiles | Profile CRUD + DynamoDB + signup trigger + CI/CD |
 | Order | TypeScript + Express | Order lifecycle | Planned |
 | Inventory | TBD | Stock reservations and movements | Planned |
 | Notification | TBD | Customer notifications | Planned |
 
-Cognito owns identity. The User Service will own profile data only.
+Cognito owns identity. The User Service owns profile data only.
 
 ## Authentication
 
-Cognito is wired into the Product API with an API Gateway JWT authorizer.
+Cognito is wired into both APIs with API Gateway JWT authorizers.
 
 - Email sign-in with email verification.
 - Public app client, no client secret.
 - Groups: `admins` and `customers`.
 - Access tokens: 15 minutes. Refresh tokens: 7 days.
 - API Gateway validates the JWT signature, issuer, audience, and expiry.
-- Public routes: `GET /health`, `GET /products`, `GET /products/{id}`.
-- Protected routes: `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}`.
+- Public Product routes: `GET /health`, `GET /products`, `GET /products/{id}`.
+- Protected Product routes: `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}`.
+- Public User route: `GET /health`.
+- Protected User routes: `GET /users/me`, `PUT /users/me`, `GET /users/{sub}`.
 - A Cognito `PostConfirmation` Lambda creates the User Service profile at signup. `GET /users/me` remains a lazy fallback.
 - Missing, invalid, or expired tokens return `401` before the Lambda runs.
 
 Cognito access tokens are used for API authorization. API Gateway accepts a token when its `aud` or `client_id` matches the configured app client.
 
-**Scope decision:** this stage enforces authentication only. Role- and ownership-based authorization are intentionally deferred. Any authenticated user can currently write products, so the write endpoints are development-only until authorization is added.
+**Scope decision:** this stage enforces authentication only. Role- and ownership-based authorization are intentionally deferred. Any authenticated user can currently write products and read any user profile by `sub`, so the protected endpoints are development-only until authorization is added.
 
 ## Technology stack
 
 | Area | Technology |
 |---|---|
-| Compute | AWS Lambda, ZIP deployments, arm64 |
+| Compute | AWS Lambda, ZIP deployments (arm64 Go, x86_64 Python) |
 | HTTP | API Gateway HTTP APIs |
 | Data | DynamoDB, access-pattern-driven modeling |
 | Identity | Amazon Cognito |
@@ -177,7 +183,7 @@ Expected response:
 }
 ```
 
-### Run the User Service base locally
+### Run the User Service locally
 
 ```bash
 cd services/user-service
@@ -190,13 +196,22 @@ python manage.py test
 python manage.py runserver 0.0.0.0:8001
 ```
 
-Test:
+Health:
 
 ```bash
 curl -i http://localhost:8001/health
 ```
 
-The User Service currently contains only the Django project base, health endpoint, and Mangum handler. Profile CRUD and DynamoDB integration are not implemented yet.
+The User Service exposes profile CRUD, lazy profile creation, and the Cognito
+signup trigger. Local `/users` calls need trusted headers because API Gateway
+is not in front of the local server:
+
+```bash
+curl -i http://localhost:8001/users/me \
+  -H 'X-Auth-Sub: local-user' \
+  -H 'X-Auth-Email: local@example.com' \
+  -H 'X-Auth-Token-Use: access'
+```
 
 ### Configuration
 
@@ -223,17 +238,19 @@ zip -j bootstrap.zip bootstrap
 
 Lambda arm64 is used because Go cross-compiles cleanly and Graviton is cheaper per GB-second than x86_64. The Lambda function architecture must match the binary.
 
-The User Service Lambda handler will be `user_service.handler.handler`, using the Python 3.12 runtime.
+The User Service API Lambda handler is `user_service.handler.handler`, and the Cognito signup trigger handler is `user_service.trigger.handler`. Both use the Python 3.12 runtime.
 
 ## Deployment
 
 The current development deployment uses:
 
-- One Lambda function for the Product Service
-- One API Gateway HTTP API
+- Product Lambda and Product API Gateway HTTP API
+- User Lambda and User API Gateway HTTP API
+- Cognito PostConfirmation trigger Lambda for user profiles
+- DynamoDB tables for products and users
 - CloudWatch Logs with short retention
-- A scoped IAM execution role
-- A ZIP artifact containing the `bootstrap` binary
+- Scoped IAM execution roles
+- ZIP artifacts for the Go binary and the Python package
 
 Infrastructure is provisioned manually for now. It will move to Terraform so that development and production environments are reproducible.
 
@@ -247,7 +264,7 @@ Infrastructure is provisioned manually for now. It will move to Terraform so tha
 `.github/workflows/user-service-deploy.yml` provides:
 
 - **Pull requests:** run the Django test suite and package the Lambda artifact.
-- **Push to `main`:** assume a scoped AWS role through GitHub OIDC, update the signup trigger Lambda, update the User Service API Lambda when it exists, and run an optional API smoke test.
+- **Push to `main`:** assume a scoped AWS role through GitHub OIDC, update both the signup trigger Lambda and the User Service API Lambda, and run the `/health` smoke test.
 
 No long-lived AWS access keys are stored in GitHub. The workflows exchange short-lived GitHub OIDC tokens for temporary AWS credentials and use roles restricted to this repository, branch, and specific Lambda functions.
 
@@ -257,7 +274,7 @@ No long-lived AWS access keys are stored in GitHub. The workflows exchange short
 |---|---|
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
 | 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
-| 3 | Cognito authentication *(implemented)*, authorization *(deferred)*, Django User Service *(implemented; API deployment pending)*, Order Service |
+| 3 | Cognito authentication *(implemented)*, authorization *(deferred)*, Django User Service *(implemented and deployed)*, Order Service |
 | 4 | EventBridge, SQS, inventory, notifications, idempotency |
 | 5 | Terraform for dev and prod, remote state, least-privilege IAM |
 | 6 | Independent pipelines for every service |
@@ -270,7 +287,8 @@ No long-lived AWS access keys are stored in GitHub. The workflows exchange short
 - IAM permissions are scoped to the resources each function needs.
 - Lambda functions run outside a VPC; they use AWS service endpoints directly.
 - Product reads are public; product writes require a Cognito access token.
-- Authorization is intentionally deferred; authenticated write endpoints are development-only.
+- User profile routes require a Cognito access token.
+- Authorization is intentionally deferred; protected endpoints are development-only.
 - Cognito owns passwords; no service stores credentials.
 
 ## License
