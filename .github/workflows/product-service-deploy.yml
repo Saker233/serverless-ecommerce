@@ -1,0 +1,128 @@
+name: Product Service CI/CD
+
+on:
+  pull_request:
+    paths:
+      - "services/product-service/**"
+      - ".github/workflows/product-service-deploy.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/product-service/**"
+      - ".github/workflows/product-service-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-service-dev
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  FUNCTION_NAME: serverless-ecommerce-dev-product
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/product-service
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: services/product-service/go.mod
+          cache-dependency-path: services/product-service/go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build Lambda artifact
+        run: |
+          VERSION="${GITHUB_SHA::7}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
+            -o bootstrap ./cmd/lambda
+          zip -j bootstrap.zip bootstrap
+          unzip -l bootstrap.zip
+
+      - name: Upload Lambda artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-bootstrap
+          path: services/product-service/bootstrap.zip
+          retention-days: 7
+
+  deploy:
+    name: Deploy to dev
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: product-bootstrap
+          path: services/product-service
+
+      - name: Assume AWS deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update Lambda code
+        working-directory: services/product-service
+        run: |
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://bootstrap.zip
+
+      - name: Wait for Lambda update
+        run: |
+          for attempt in $(seq 1 30); do
+            status=$(aws lambda get-function-configuration \
+              --function-name "$FUNCTION_NAME" \
+              --query LastUpdateStatus \
+              --output text)
+
+            echo "attempt ${attempt}: ${status}"
+
+            case "$status" in
+              Successful) exit 0 ;;
+              Failed)
+                echo "Lambda update failed"
+                exit 1
+                ;;
+            esac
+
+            sleep 2
+          done
+
+          echo "Timed out waiting for the Lambda update"
+          exit 1
+
+      - name: Smoke test
+        run: |
+          response=$(curl --fail --silent --show-error --retry 5 --retry-delay 2 \
+            "${{ secrets.PRODUCT_API_URL }}/health")
+
+          echo "$response"
+
+          echo "$response" | jq -e --arg version "${GITHUB_SHA::7}" \
+            '.status == "ok" and .version == $version'
