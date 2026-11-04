@@ -1,0 +1,157 @@
+name: User Service CI/CD
+
+on:
+  pull_request:
+    paths:
+      - "services/user-service/**"
+      - ".github/workflows/user-service-deploy.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/user-service/**"
+      - ".github/workflows/user-service-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: user-service-dev
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  API_FUNCTION_NAME: serverless-ecommerce-dev-user
+  TRIGGER_FUNCTION_NAME: serverless-ecommerce-dev-user-trigger
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/user-service
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/user-service/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Test
+        run: python manage.py test -v 2
+
+      - name: Build Lambda artifact
+        run: |
+          rm -rf build
+          python -m pip install --target build -r requirements.txt
+          cp -R user_service build/
+          find build -name __pycache__ -type d -prune -exec rm -rf {} +
+          cd build
+          zip -qr ../user-service.zip .
+          cd ..
+          unzip -l user-service.zip | head -20
+
+      - name: Upload Lambda artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: user-service-package
+          path: services/user-service/user-service.zip
+          retention-days: 7
+
+  deploy:
+    name: Deploy to dev
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: user-service-package
+          path: services/user-service
+
+      - name: Assume AWS deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.USER_SERVICE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update Lambda code
+        working-directory: services/user-service
+        run: |
+          set -euo pipefail
+
+          wait_for_update() {
+            local function_name="$1"
+
+            for attempt in $(seq 1 30); do
+              status=$(aws lambda get-function-configuration \
+                --function-name "$function_name" \
+                --query LastUpdateStatus \
+                --output text)
+
+              echo "${function_name} attempt ${attempt}: ${status}"
+
+              case "$status" in
+                Successful) return 0 ;;
+                Failed)
+                  echo "${function_name} update failed"
+                  return 1
+                  ;;
+              esac
+
+              sleep 2
+            done
+
+            echo "Timed out waiting for ${function_name}"
+            return 1
+          }
+
+          deploy_function() {
+            local function_name="$1"
+
+            aws lambda update-function-code \
+              --function-name "$function_name" \
+              --zip-file fileb://user-service.zip
+
+            wait_for_update "$function_name"
+          }
+
+          deploy_function "$TRIGGER_FUNCTION_NAME"
+
+          if aws lambda get-function --function-name "$API_FUNCTION_NAME" >/dev/null 2>&1; then
+            deploy_function "$API_FUNCTION_NAME"
+          else
+            echo "API Lambda ${API_FUNCTION_NAME} is not deployed yet; skipping API code update"
+          fi
+
+      - name: Smoke test
+        env:
+          USER_SERVICE_API_URL: ${{ secrets.USER_SERVICE_API_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${USER_SERVICE_API_URL:-}" ]; then
+            echo "USER_SERVICE_API_URL is not set; skipping API smoke test"
+            exit 0
+          fi
+
+          response=$(curl --fail --silent --show-error --retry 5 --retry-delay 2 \
+            "${USER_SERVICE_API_URL}/health")
+
+          echo "$response"
+          echo "$response" | jq -e '.status == "ok"'

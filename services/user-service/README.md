@@ -89,12 +89,23 @@ curl -i http://localhost:8001/users/me \
 
 `app.env` is gitignored. `.env.example` is the committed template.
 
+## CI/CD
+
+`.github/workflows/user-service-deploy.yml`:
+
+- Pull requests run `python manage.py test` and build the Lambda ZIP.
+- Pushes to `main` update the Cognito trigger Lambda.
+- The API Lambda is updated when `serverless-ecommerce-dev-user` exists.
+- The API smoke test runs only when the `USER_SERVICE_API_URL` repository secret is set.
+- GitHub OIDC is used through `USER_SERVICE_ROLE_ARN`; no AWS access keys are stored in GitHub.
+
 ## Lambda
 
-Handler:
+Handlers:
 
 ```text
-user_service.handler.handler
+user_service.handler.handler        # API
+user_service.trigger.handler        # Cognito PostConfirmation
 ```
 
 Runtime: Python 3.12 or newer.

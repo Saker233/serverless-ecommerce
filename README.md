@@ -111,7 +111,8 @@ Cognito access tokens are used for API authorization. API Gateway accepts a toke
 .
 ├── .github/
 │   └── workflows/
-│       └── product-service-deploy.yml
+│       ├── product-service-deploy.yml
+│       └── user-service-deploy.yml
 ├── services/
 │   ├── product-service/
 │   │   ├── cmd/
@@ -243,7 +244,12 @@ Infrastructure is provisioned manually for now. It will move to Terraform so tha
 - **Pull requests:** `go vet`, `go test`, arm64 build, artifact upload.
 - **Push to `main`:** test, build, assume an AWS role through GitHub OIDC, update the Lambda, wait for the update, and smoke-test `/health`.
 
-No long-lived AWS access keys are stored in GitHub. The workflow exchanges a short-lived GitHub OIDC token for temporary AWS credentials and uses a role restricted to this repository, branch, and Lambda function.
+`.github/workflows/user-service-deploy.yml` provides:
+
+- **Pull requests:** run the Django test suite and package the Lambda artifact.
+- **Push to `main`:** assume a scoped AWS role through GitHub OIDC, update the signup trigger Lambda, update the User Service API Lambda when it exists, and run an optional API smoke test.
+
+No long-lived AWS access keys are stored in GitHub. The workflows exchange short-lived GitHub OIDC tokens for temporary AWS credentials and use roles restricted to this repository, branch, and specific Lambda functions.
 
 ## Roadmap
 
