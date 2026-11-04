@@ -72,7 +72,7 @@ Services never read or write another service's DynamoDB table. Cross-service rea
 |---|---|---|---|
 | Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; Cognito-authenticated writes |
 | User | Python + Django | User profiles | Profile CRUD + DynamoDB + signup trigger + CI/CD |
-| Order | TypeScript + Express | Order lifecycle | Planned |
+| Order | TypeScript + Express | Order lifecycle | Base scaffolded; order CRUD planned |
 | Inventory | TBD | Stock reservations and movements | Planned |
 | Notification | TBD | Customer notifications | Planned |
 
@@ -135,7 +135,12 @@ Cognito access tokens are used for API authorization. API Gateway accepts a toke
 │   │   ├── .env.example
 │   │   ├── manage.py
 │   │   └── requirements.txt
-│   ├── order-service/         # planned
+│   ├── order-service/
+│   │   ├── src/
+│   │   ├── tests/
+│   │   ├── .env.example
+│   │   ├── package.json
+│   │   └── tsconfig.json
 │   ├── inventory-service/     # planned
 │   └── notification-service/  # planned
 ├── events/                    # planned event schemas
@@ -274,7 +279,7 @@ No long-lived AWS access keys are stored in GitHub. The workflows exchange short
 |---|---|
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
 | 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
-| 3 | Cognito authentication *(implemented)*, authorization *(deferred)*, Django User Service *(implemented and deployed)*, Order Service |
+| 3 | Cognito authentication *(implemented)*, authorization *(deferred)*, Django User Service *(implemented and deployed)*, Order Service *(base scaffolded)* |
 | 4 | EventBridge, SQS, inventory, notifications, idempotency |
 | 5 | Terraform for dev and prod, remote state, least-privilege IAM |
 | 6 | Independent pipelines for every service |

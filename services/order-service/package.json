@@ -1,0 +1,35 @@
+{
+  "name": "@serverless-ecommerce/order-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Order Service built with TypeScript, Express, and AWS Lambda",
+  "main": "dist/lambda.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0",
+    "dotenv": "^18.0.0",
+    "express": "^5.3.0",
+    "serverless-http": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/supertest": "^7.0.0",
+    "supertest": "^7.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.1.0"
+  }
+}
