@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"github.com/Saker233/serverless-ecommerce/services/product-service/internal/config"
 	"github.com/Saker233/serverless-ecommerce/services/product-service/internal/httpapi"
+	"github.com/Saker233/serverless-ecommerce/services/product-service/internal/product"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	ginadapter "github.com/awslabs/aws-lambda-go-api-proxy/gin"
@@ -18,7 +20,13 @@ var adapter *ginadapter.GinLambdaV2
 func init() {
 	cfg := config.Load()
 	cfg.Version = version
-	adapter = ginadapter.NewV2(httpapi.NewRouter(cfg))
+
+	repo, err := product.NewDynamoRepository(context.Background(), cfg.ProductsTable)
+	if err != nil {
+		log.Printf("product repository disabled: %v", err)
+	}
+
+	adapter = ginadapter.NewV2(httpapi.NewRouter(cfg, repo))
 }
 
 func main() {

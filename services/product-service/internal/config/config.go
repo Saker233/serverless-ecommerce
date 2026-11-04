@@ -14,10 +14,11 @@ var loadEnvOnce sync.Once
 
 // Config holds runtime configuration loaded from environment variables.
 type Config struct {
-	Env         string
-	ServiceName string
-	LogLevel    string
-	Version     string
+	Env           string
+	ServiceName   string
+	LogLevel      string
+	Version       string
+	ProductsTable string
 }
 
 // Load reads configuration from the environment and applies safe defaults.
@@ -27,10 +28,11 @@ func Load() Config {
 	loadEnvOnce.Do(loadLocalEnv)
 
 	return Config{
-		Env:         envOrDefault("ENV", "dev"),
-		ServiceName: envOrDefault("SERVICE_NAME", "product-service"),
-		LogLevel:    envOrDefault("LOG_LEVEL", "info"),
-		Version:     envOrDefault("VERSION", "dev"),
+		Env:           envOrDefault("ENV", "dev"),
+		ServiceName:   envOrDefault("SERVICE_NAME", "product-service"),
+		LogLevel:      envOrDefault("LOG_LEVEL", "info"),
+		Version:       envOrDefault("VERSION", "dev"),
+		ProductsTable: envOrDefault("PRODUCTS_TABLE", ""),
 	}
 }
 

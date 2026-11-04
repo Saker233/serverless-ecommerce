@@ -17,7 +17,7 @@ func newTestRouter() http.Handler {
 		ServiceName: "product-service",
 		LogLevel:    "error",
 		Version:     "test",
-	})
+	}, nil)
 }
 
 func TestHealth(t *testing.T) {

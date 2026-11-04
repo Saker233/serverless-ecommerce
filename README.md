@@ -4,7 +4,7 @@ A polyglot, event-driven e-commerce backend built on AWS serverless services.
 
 The project explores how to design, deploy, and operate independently deployable microservices using different runtimes while keeping infrastructure, security, and observability production-oriented.
 
-> **Status:** early development. The Product Service health endpoint is deployed to Lambda behind API Gateway, with CI/CD through GitHub Actions. Product CRUD and DynamoDB are next.
+> **Status:** early development. The Product Service exposes health and product CRUD endpoints on Lambda behind API Gateway, backed by DynamoDB, with CI/CD through GitHub Actions. Authentication and the remaining services are next.
 
 ## Goals
 
@@ -25,11 +25,12 @@ Client
   ▼
 API Gateway HTTP API
   │  GET /health
+  │  /products CRUD
   ▼
 Lambda: product-service
   │  Go + Gin
-  ▼
-CloudWatch Logs
+  ├──► DynamoDB: products
+  └──► CloudWatch Logs
 ```
 
 ### Target
@@ -64,7 +65,7 @@ Services never read or write another service's DynamoDB table. Cross-service rea
 
 | Service | Runtime | Responsibility | Status |
 |---|---|---|---|
-| Product | Go + Gin | Product catalog, pricing, categories | Health endpoint + CI/CD |
+| Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD |
 | User | Python + Django | User profiles | Planned |
 | Order | TypeScript + Express | Order lifecycle | Planned |
 | Inventory | TBD | Stock reservations and movements | Planned |
@@ -196,7 +197,7 @@ No long-lived AWS access keys are stored in GitHub. The workflow exchanges a sho
 | Stage | Scope |
 |---|---|
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
-| 2 | Product DynamoDB CRUD, pagination, conditional writes |
+| 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
 | 3 | User and Order services, Cognito authentication |
 | 4 | EventBridge, SQS, inventory, notifications, idempotency |
 | 5 | Terraform for dev and prod, remote state, least-privilege IAM |
