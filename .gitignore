@@ -1,12 +1,37 @@
+# Build artifacts
+bin/
+dist/
+bootstrap
+bootstrap.zip
+*.zip
+*.test
+coverage.out
+
+# Node
+node_modules/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Terraform
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfplan
+crash.log
+
+# Environment files and local secrets
 .env
 .env.*
-bin/
-dist/
-node_modules/
-.venv/
-__pycache__/
-*.zip
-bootstrap
+!.env.example
+app.env
+*.pem
+*.key
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.log
