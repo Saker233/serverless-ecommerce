@@ -4,7 +4,7 @@ A polyglot, event-driven e-commerce backend built on AWS serverless services.
 
 The project explores how to design, deploy, and operate independently deployable microservices using different runtimes while keeping infrastructure, security, and observability production-oriented.
 
-> **Status:** early development. The Product Service exposes health and product CRUD endpoints on Lambda behind API Gateway, backed by DynamoDB, with CI/CD through GitHub Actions. Authentication and the remaining services are next.
+> **Status:** early development. Product Service CRUD, DynamoDB, and CI/CD are working. Cognito authenticates product writes at API Gateway. Authorization is intentionally deferred at this stage, and the Django User Service base has been scaffolded.
 
 ## Goals
 
@@ -21,16 +21,17 @@ The project explores how to design, deploy, and operate independently deployable
 
 ```text
 Client
-  │
+  │  Cognito access token for product writes
   ▼
-API Gateway HTTP API
-  │  GET /health
-  │  /products CRUD
-  ▼
-Lambda: product-service
-  │  Go + Gin
-  ├──► DynamoDB: products
-  └──► CloudWatch Logs
+Amazon Cognito ──► API Gateway HTTP API
+                       │
+                       │  public: GET /health, GET /products, GET /products/{id}
+                       │  JWT:    POST/PUT/DELETE /products
+                       ▼
+                 Lambda: product-service
+                       │  Go + Gin
+                       ├──► DynamoDB: products
+                       └──► CloudWatch Logs
 ```
 
 ### Target
@@ -65,13 +66,30 @@ Services never read or write another service's DynamoDB table. Cross-service rea
 
 | Service | Runtime | Responsibility | Status |
 |---|---|---|---|
-| Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD |
-| User | Python + Django | User profiles | Planned |
+| Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; Cognito-protected writes |
+| User | Python + Django | User profiles | Base scaffolded; profile CRUD planned |
 | Order | TypeScript + Express | Order lifecycle | Planned |
 | Inventory | TBD | Stock reservations and movements | Planned |
 | Notification | TBD | Customer notifications | Planned |
 
-Cognito will own identity. The User Service will own profile data only.
+Cognito owns identity. The User Service will own profile data only.
+
+## Authentication
+
+Cognito is wired into the Product API with an API Gateway JWT authorizer.
+
+- Email sign-in with email verification.
+- Public app client, no client secret.
+- Groups: `admins` and `customers`.
+- Access tokens: 15 minutes. Refresh tokens: 7 days.
+- API Gateway validates the JWT signature, issuer, audience, and expiry.
+- Public routes: `GET /health`, `GET /products`, `GET /products/{id}`.
+- Protected routes: `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}`.
+- Missing, invalid, or expired tokens return `401` before the Lambda runs.
+
+Cognito access tokens are used for API authorization. API Gateway accepts a token when its `aud` or `client_id` matches the configured app client.
+
+**Scope decision:** this stage enforces authentication only. Role- and ownership-based authorization are intentionally deferred. Any authenticated user can currently write products, so the write endpoints are development-only until authorization is added.
 
 ## Technology stack
 
@@ -97,10 +115,18 @@ Cognito will own identity. The User Service will own profile data only.
 │   ├── product-service/
 │   │   ├── cmd/
 │   │   ├── internal/
+│   │   │   ├── config/
+│   │   │   ├── httpapi/
+│   │   │   └── product/
 │   │   ├── .env.example
 │   │   ├── go.mod
 │   │   └── go.sum
-│   ├── user-service/          # planned
+│   ├── user-service/
+│   │   ├── user_service/
+│   │   ├── tests/
+│   │   ├── .env.example
+│   │   ├── manage.py
+│   │   └── requirements.txt
 │   ├── order-service/         # planned
 │   ├── inventory-service/     # planned
 │   └── notification-service/  # planned
@@ -115,6 +141,7 @@ Cognito will own identity. The User Service will own profile data only.
 ### Prerequisites
 
 - Go 1.26+
+- Python 3.12+ recommended (Django base)
 - AWS CLI v2 is recommended for deployments
 - `git`, `zip`, `unzip`, `curl`
 - An AWS account for deployment
@@ -148,18 +175,41 @@ Expected response:
 }
 ```
 
+### Run the User Service base locally
+
+```bash
+cd services/user-service
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example app.env
+python manage.py test
+python manage.py runserver 0.0.0.0:8001
+```
+
+Test:
+
+```bash
+curl -i http://localhost:8001/health
+```
+
+The User Service currently contains only the Django project base, health endpoint, and Mangum handler. Profile CRUD and DynamoDB integration are not implemented yet.
+
 ### Configuration
 
-Local configuration is loaded from `app.env` through `godotenv`.
+Both services use a local `app.env` file.
 
 - `app.env` is local only and gitignored.
 - `.env.example` is the committed template.
-- Existing shell environment variables take precedence over `app.env`.
+- Existing shell environment variables take precedence.
 - Lambda configuration is provided through the function's environment variables, not `app.env`.
+
+The Product Service loads `app.env` through `godotenv`; the User Service loads it through `python-dotenv` in Django settings.
 
 Never commit credentials or local secret values.
 
-### Build the Lambda artifact
+### Build the Product Lambda artifact
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
@@ -170,6 +220,8 @@ zip -j bootstrap.zip bootstrap
 ```
 
 Lambda arm64 is used because Go cross-compiles cleanly and Graviton is cheaper per GB-second than x86_64. The Lambda function architecture must match the binary.
+
+The User Service Lambda handler will be `user_service.handler.handler`, using the Python 3.12 runtime.
 
 ## Deployment
 
@@ -198,7 +250,7 @@ No long-lived AWS access keys are stored in GitHub. The workflow exchanges a sho
 |---|---|
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
 | 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
-| 3 | User and Order services, Cognito authentication |
+| 3 | Cognito authentication *(implemented)*, authorization *(deferred)*, Django User Service base *(scaffolded)*, Order Service |
 | 4 | EventBridge, SQS, inventory, notifications, idempotency |
 | 5 | Terraform for dev and prod, remote state, least-privilege IAM |
 | 6 | Independent pipelines for every service |
@@ -210,7 +262,9 @@ No long-lived AWS access keys are stored in GitHub. The workflow exchanges a sho
 - GitHub Actions authenticates to AWS through OIDC, not static keys.
 - IAM permissions are scoped to the resources each function needs.
 - Lambda functions run outside a VPC; they use AWS service endpoints directly.
-- The current dev endpoints are not yet protected by Cognito. Authentication arrives in Stage 3.
+- Product reads are public; product writes require a Cognito access token.
+- Authorization is intentionally deferred; authenticated write endpoints are development-only.
+- Cognito owns passwords; no service stores credentials.
 
 ## License
 
