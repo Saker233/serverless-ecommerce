@@ -1,21 +1,11 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 
-import { createApp } from "../src/app";
-import { loadConfig } from "../src/config";
-
-const app = createApp(
-  loadConfig({
-    ENV: "test",
-    SERVICE_NAME: "order-service",
-    VERSION: "test",
-    LOG_LEVEL: "error",
-    PORT: "8002",
-  }),
-);
+import { buildTestApp } from "./testApp";
 
 describe("order service base", () => {
   it("returns health", async () => {
+    const { app } = buildTestApp();
     const response = await request(app).get("/health");
 
     expect(response.status).toBe(200);
@@ -31,6 +21,7 @@ describe("order service base", () => {
   });
 
   it("echoes a supplied correlation ID", async () => {
+    const { app } = buildTestApp();
     const response = await request(app)
       .get("/health")
       .set("x-correlation-id", "test-correlation-id");
@@ -39,6 +30,7 @@ describe("order service base", () => {
   });
 
   it("returns a JSON 404 for unknown routes", async () => {
+    const { app } = buildTestApp();
     const response = await request(app).get("/does-not-exist");
 
     expect(response.status).toBe(404);
@@ -51,6 +43,7 @@ describe("order service base", () => {
   });
 
   it("rejects non-GET health requests", async () => {
+    const { app } = buildTestApp();
     const response = await request(app).post("/health");
 
     expect(response.status).toBe(405);
@@ -58,6 +51,7 @@ describe("order service base", () => {
   });
 
   it("returns a JSON 400 for malformed JSON", async () => {
+    const { app } = buildTestApp();
     const response = await request(app)
       .post("/does-not-exist")
       .set("content-type", "application/json")

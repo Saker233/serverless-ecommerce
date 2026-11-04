@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2, Context } from "aws-lambda";
 import serverless from "serverless-http";
 
 import { createApp } from "./app";
+import { injectIdentityHeaders } from "./auth";
 import { loadConfig } from "./config";
 
 const app = createApp(loadConfig());
@@ -14,6 +15,8 @@ export async function handler(
   event: APIGatewayProxyEventV2,
   context: Context,
 ): Promise<unknown> {
+  injectIdentityHeaders(event);
+
   const headers = event.headers ?? {};
   const hasCorrelationId = Object.keys(headers).some(
     (key) => key.toLowerCase() === "x-correlation-id",

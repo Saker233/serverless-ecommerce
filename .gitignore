@@ -2,6 +2,7 @@
 bin/
 build/
 dist/
+.lambda-package/
 bootstrap
 bootstrap.zip
 *.zip
