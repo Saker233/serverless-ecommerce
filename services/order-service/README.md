@@ -24,8 +24,6 @@ Not implemented yet:
 - Product Service price validation
 - Order status transitions
 - EventBridge/SQS publishing
-- Order Lambda/API Gateway deployment
-- CI/CD workflow
 
 ## Endpoints
 
@@ -124,6 +122,21 @@ dist/lambda.handler
 
 Runtime: Node.js 22. The ZIP contains `dist/`, production `node_modules`, and
 `package.json`. `app.env` is not packaged.
+
+## CI/CD
+
+`.github/workflows/order-service-deploy.yml`:
+
+- Pull requests run typechecking and tests, then build `order-service.zip`.
+- Pushes to `main` update `serverless-ecommerce-dev-order` through GitHub OIDC.
+- The `/health` smoke test runs through `ORDER_SERVICE_API_URL`.
+
+GitHub secrets:
+
+| Secret | Purpose |
+|---|---|
+| `ORDER_SERVICE_ROLE_ARN` | Scoped deploy role for the Order Lambda |
+| `ORDER_SERVICE_API_URL` | API Gateway URL for the smoke test |
 
 ## Configuration
 

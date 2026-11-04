@@ -4,7 +4,7 @@ A polyglot, event-driven e-commerce backend built on AWS serverless services.
 
 The project explores how to design, deploy, and operate independently deployable microservices using different runtimes while keeping infrastructure, security, and observability production-oriented.
 
-> **Status:** early development. Product Service CRUD + DynamoDB + CI/CD and the Django User Service profile API + Cognito signup trigger + CI/CD are deployed. Cognito authenticates both APIs. Authorization is intentionally deferred at this stage.
+> **Status:** early development. Product Service CRUD + DynamoDB + CI/CD, the Django User Service profile API + Cognito signup trigger + CI/CD, and the TypeScript Order Service CRUD + DynamoDB + CI/CD are deployed. Cognito authenticates all three APIs. Authorization is intentionally deferred except for order ownership checks.
 
 ## Goals
 
@@ -34,6 +34,11 @@ Amazon Cognito
   │       public: GET /health
   │       JWT:    GET/PUT /users/me, GET /users/{sub}
   │       └──► User Lambda (Django/Mangum) ──► DynamoDB: users
+  │
+  ├──► Order API Gateway HTTP API
+  │       public: GET /health
+  │       JWT:    POST /orders, GET /orders, GET /orders/{id}
+  │       └──► Order Lambda (TypeScript/Express) ──► DynamoDB: orders
   │
   └──► PostConfirmation trigger ──► User trigger Lambda ──► DynamoDB: users
 ```
@@ -72,7 +77,7 @@ Services never read or write another service's DynamoDB table. Cross-service rea
 |---|---|---|---|
 | Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; Cognito-authenticated writes |
 | User | Python + Django | User profiles | Profile CRUD + DynamoDB + signup trigger + CI/CD |
-| Order | TypeScript + Express | Order lifecycle | CRUD + DynamoDB + idempotency; deployment pending |
+| Order | TypeScript + Express | Order lifecycle | CRUD + DynamoDB + idempotency + CI/CD |
 | Inventory | TBD | Stock reservations and movements | Planned |
 | Notification | TBD | Customer notifications | Planned |
 
@@ -80,7 +85,7 @@ Cognito owns identity. The User Service owns profile data only.
 
 ## Authentication
 
-Cognito is wired into both APIs with API Gateway JWT authorizers.
+Cognito is wired into all three APIs with API Gateway JWT authorizers.
 
 - Email sign-in with email verification.
 - Public app client, no client secret.
@@ -91,18 +96,21 @@ Cognito is wired into both APIs with API Gateway JWT authorizers.
 - Protected Product routes: `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}`.
 - Public User route: `GET /health`.
 - Protected User routes: `GET /users/me`, `PUT /users/me`, `GET /users/{sub}`.
+- Public Order route: `GET /health`.
+- Protected Order routes: `POST /orders`, `GET /orders`, `GET /orders/{id}`.
+- Order creation requires `Idempotency-Key`.
 - A Cognito `PostConfirmation` Lambda creates the User Service profile at signup. `GET /users/me` remains a lazy fallback.
 - Missing, invalid, or expired tokens return `401` before the Lambda runs.
 
 Cognito access tokens are used for API authorization. API Gateway accepts a token when its `aud` or `client_id` matches the configured app client.
 
-**Scope decision:** this stage enforces authentication only. Role- and ownership-based authorization are intentionally deferred. Any authenticated user can currently write products and read any user profile by `sub`, so the protected endpoints are development-only until authorization is added.
+**Scope decision:** this stage is primarily authentication-only. Role-based authorization is intentionally deferred. Product writes and User profile reads are not role-restricted. Order reads do enforce ownership: `GET /orders/{id}` returns only the caller's order. The protected endpoints remain development-only until broader authorization is added.
 
 ## Technology stack
 
 | Area | Technology |
 |---|---|
-| Compute | AWS Lambda, ZIP deployments (arm64 Go, x86_64 Python) |
+| Compute | AWS Lambda, ZIP deployments (arm64 Go, x86_64 Python, arm64 Node) |
 | HTTP | API Gateway HTTP APIs |
 | Data | DynamoDB, access-pattern-driven modeling |
 | Identity | Amazon Cognito |
@@ -118,7 +126,8 @@ Cognito access tokens are used for API authorization. API Gateway accepts a toke
 ├── .github/
 │   └── workflows/
 │       ├── product-service-deploy.yml
-│       └── user-service-deploy.yml
+│       ├── user-service-deploy.yml
+│       └── order-service-deploy.yml
 ├── services/
 │   ├── product-service/
 │   │   ├── cmd/
@@ -251,11 +260,12 @@ The current development deployment uses:
 
 - Product Lambda and Product API Gateway HTTP API
 - User Lambda and User API Gateway HTTP API
+- Order Lambda and Order API Gateway HTTP API
 - Cognito PostConfirmation trigger Lambda for user profiles
-- DynamoDB tables for products and users
+- DynamoDB tables for products, users, and orders
 - CloudWatch Logs with short retention
 - Scoped IAM execution roles
-- ZIP artifacts for the Go binary and the Python package
+- ZIP artifacts for the Go binary, Python package, and Node.js package
 
 Infrastructure is provisioned manually for now. It will move to Terraform so that development and production environments are reproducible.
 
@@ -271,6 +281,11 @@ Infrastructure is provisioned manually for now. It will move to Terraform so tha
 - **Pull requests:** run the Django test suite and package the Lambda artifact.
 - **Push to `main`:** assume a scoped AWS role through GitHub OIDC, update both the signup trigger Lambda and the User Service API Lambda, and run the `/health` smoke test.
 
+`.github/workflows/order-service-deploy.yml` provides:
+
+- **Pull requests:** run typechecking and tests, then build the Lambda ZIP.
+- **Push to `main`:** assume a scoped AWS role through GitHub OIDC, update the Order Lambda, and run the `/health` smoke test.
+
 No long-lived AWS access keys are stored in GitHub. The workflows exchange short-lived GitHub OIDC tokens for temporary AWS credentials and use roles restricted to this repository, branch, and specific Lambda functions.
 
 ## Roadmap
@@ -279,7 +294,7 @@ No long-lived AWS access keys are stored in GitHub. The workflows exchange short
 |---|---|
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
 | 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
-| 3 | Cognito authentication *(implemented)*, authorization *(deferred)*, Django User Service *(implemented and deployed)*, Order Service *(CRUD implemented; deployment pending)* |
+| 3 | Cognito authentication *(implemented)*, authorization *(deferred except order ownership)*, Django User Service *(implemented and deployed)*, Order Service *(implemented and deployed)* |
 | 4 | EventBridge, SQS, inventory, notifications, idempotency |
 | 5 | Terraform for dev and prod, remote state, least-privilege IAM |
 | 6 | Independent pipelines for every service |
