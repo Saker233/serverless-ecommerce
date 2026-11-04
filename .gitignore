@@ -1,0 +1,12 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+.env
+.env.*
+bin/
+dist/
+node_modules/
+.venv/
+__pycache__/
+*.zip
+bootstrap
