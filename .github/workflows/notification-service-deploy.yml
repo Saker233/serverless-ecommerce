@@ -1,0 +1,116 @@
+name: Notification Service CI/CD
+
+on:
+  pull_request:
+    paths:
+      - "services/notification-service/**"
+      - ".github/workflows/notification-service-deploy.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/notification-service/**"
+      - ".github/workflows/notification-service-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notification-service-dev
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  FUNCTION_NAME: serverless-ecommerce-dev-notification
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/notification-service
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/notification-service/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build Lambda package
+        run: npm run package
+
+      - name: Upload Lambda artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: notification-service-package
+          path: services/notification-service/notification-service.zip
+          retention-days: 7
+
+  deploy:
+    name: Deploy to dev
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: notification-service-package
+          path: services/notification-service
+
+      - name: Assume AWS deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.NOTIFICATION_SERVICE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update Lambda code
+        working-directory: services/notification-service
+        run: |
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://notification-service.zip
+
+      - name: Wait for Lambda update
+        run: |
+          for attempt in $(seq 1 30); do
+            status=$(aws lambda get-function-configuration \
+              --function-name "$FUNCTION_NAME" \
+              --query LastUpdateStatus \
+              --output text)
+
+            echo "attempt ${attempt}: ${status}"
+
+            case "$status" in
+              Successful) exit 0 ;;
+              Failed)
+                echo "Lambda update failed"
+                exit 1
+                ;;
+            esac
+
+            sleep 2
+          done
+
+          echo "Timed out waiting for the Lambda update"
+          exit 1

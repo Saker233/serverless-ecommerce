@@ -91,6 +91,21 @@ npm test
 npm run build
 ```
 
+## CI/CD
+
+`.github/workflows/notification-service-deploy.yml`:
+
+- Pull requests run typechecking and tests, then build `notification-service.zip`.
+- Pushes to `main` update `serverless-ecommerce-dev-notification` through GitHub OIDC.
+
+Secret:
+
+| Secret | Purpose |
+|---|---|
+| `NOTIFICATION_SERVICE_ROLE_ARN` | Scoped deploy role for the Notification Lambda |
+
+There is no HTTP smoke test because the service has no API.
+
 ## Lambda package
 
 ```bash

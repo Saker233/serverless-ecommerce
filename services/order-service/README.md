@@ -145,7 +145,7 @@ published again; consumers deduplicate by `eventId`.
 `.github/workflows/order-service-deploy.yml`:
 
 - Pull requests run typechecking and tests, then build `order-service.zip`.
-- Pushes to `main` update `serverless-ecommerce-dev-order` through GitHub OIDC.
+- Pushes to `main` update both `serverless-ecommerce-dev-order` and `serverless-ecommerce-dev-order-outbox-publisher` through GitHub OIDC.
 - The `/health` smoke test runs through `ORDER_SERVICE_API_URL`.
 
 GitHub secrets:

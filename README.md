@@ -125,7 +125,8 @@ Cognito access tokens are used for API authorization. API Gateway accepts a toke
 │   └── workflows/
 │       ├── product-service-deploy.yml
 │       ├── user-service-deploy.yml
-│       └── order-service-deploy.yml
+│       ├── order-service-deploy.yml
+│       └── notification-service-deploy.yml
 ├── services/
 │   ├── product-service/
 │   │   ├── cmd/
@@ -286,7 +287,12 @@ Infrastructure is provisioned manually for now. It will move to Terraform so tha
 `.github/workflows/order-service-deploy.yml` provides:
 
 - **Pull requests:** run typechecking and tests, then build the Lambda ZIP.
-- **Push to `main`:** assume a scoped AWS role through GitHub OIDC, update the Order Lambda, and run the `/health` smoke test.
+- **Push to `main`:** assume a scoped AWS role through GitHub OIDC, update both the Order API Lambda and the outbox publisher Lambda, and run the `/health` smoke test on the API.
+
+`.github/workflows/notification-service-deploy.yml` provides:
+
+- **Pull requests:** run typechecking and tests, then build the Lambda ZIP.
+- **Push to `main`:** assume a scoped AWS role through GitHub OIDC and update the Notification Lambda.
 
 No long-lived AWS access keys are stored in GitHub. The workflows exchange short-lived GitHub OIDC tokens for temporary AWS credentials and use roles restricted to this repository, branch, and specific Lambda functions.
 
@@ -297,7 +303,7 @@ No long-lived AWS access keys are stored in GitHub. The workflows exchange short
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
 | 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
 | 3 | Cognito authentication *(implemented)*, authorization *(deferred except order ownership)*, Django User Service *(implemented and deployed)*, Order Service *(implemented and deployed)* |
-| 4 | Order outbox/publisher + Notification consumer *(code implemented)*; EventBridge/SQS infrastructure pending |
+| 4 | Order outbox/publisher + Notification consumer + EventBridge/SQS *(implemented and deployed)* |
 | 5 | Terraform for dev and prod, remote state, least-privilege IAM |
 | 6 | Independent pipelines for every service |
 | 7 | Observability, distributed tracing, integration and failure testing |

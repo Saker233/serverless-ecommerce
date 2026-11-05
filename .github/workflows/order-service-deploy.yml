@@ -23,6 +23,7 @@ concurrency:
 env:
   AWS_REGION: eu-west-1
   FUNCTION_NAME: serverless-ecommerce-dev-order
+  OUTBOX_FUNCTION_NAME: serverless-ecommerce-dev-order-outbox-publisher
 
 jobs:
   test:
@@ -87,33 +88,46 @@ jobs:
       - name: Update Lambda code
         working-directory: services/order-service
         run: |
-          aws lambda update-function-code \
-            --function-name "$FUNCTION_NAME" \
-            --zip-file fileb://order-service.zip
+          set -euo pipefail
 
-      - name: Wait for Lambda update
-        run: |
-          for attempt in $(seq 1 30); do
-            status=$(aws lambda get-function-configuration \
-              --function-name "$FUNCTION_NAME" \
-              --query LastUpdateStatus \
-              --output text)
+          wait_for_update() {
+            local function_name="$1"
 
-            echo "attempt ${attempt}: ${status}"
+            for attempt in $(seq 1 30); do
+              status=$(aws lambda get-function-configuration \
+                --function-name "$function_name" \
+                --query LastUpdateStatus \
+                --output text)
 
-            case "$status" in
-              Successful) exit 0 ;;
-              Failed)
-                echo "Lambda update failed"
-                exit 1
-                ;;
-            esac
+              echo "${function_name} attempt ${attempt}: ${status}"
 
-            sleep 2
-          done
+              case "$status" in
+                Successful) return 0 ;;
+                Failed)
+                  echo "${function_name} update failed"
+                  return 1
+                  ;;
+              esac
 
-          echo "Timed out waiting for the Lambda update"
-          exit 1
+              sleep 2
+            done
+
+            echo "Timed out waiting for ${function_name}"
+            return 1
+          }
+
+          deploy_function() {
+            local function_name="$1"
+
+            aws lambda update-function-code \
+              --function-name "$function_name" \
+              --zip-file fileb://order-service.zip
+
+            wait_for_update "$function_name"
+          }
+
+          deploy_function "$FUNCTION_NAME"
+          deploy_function "$OUTBOX_FUNCTION_NAME"
 
       - name: Smoke test
         env:
