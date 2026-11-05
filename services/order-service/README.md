@@ -12,6 +12,8 @@ Current scope:
 - `GET /orders`
 - DynamoDB repository using AWS SDK v3
 - Idempotent order creation with `Idempotency-Key`
+- Transactional outbox with an `OrderCreated` event
+- DynamoDB Streams publisher Lambda code
 - Customer-based listing through a GSI
 - Cursor pagination
 - Correlation IDs, JSON logging, and JSON errors
@@ -23,7 +25,7 @@ Not implemented yet:
 
 - Product Service price validation
 - Order status transitions
-- EventBridge/SQS publishing
+- EventBridge bus, Streams mapping, SQS queues, and notification consumer infrastructure
 
 ## Endpoints
 
@@ -114,14 +116,29 @@ directory, and creates:
 order-service.zip
 ```
 
-The handler is:
+Handlers:
 
 ```text
-dist/lambda.handler
+dist/lambda.handler          # API Lambda
+dist/outbox/publisher.handler # DynamoDB Streams outbox publisher
 ```
 
 Runtime: Node.js 22. The ZIP contains `dist/`, production `node_modules`, and
 `package.json`. `app.env` is not packaged.
+
+## Outbox
+
+Order creation writes three items in one DynamoDB transaction:
+
+```text
+ORDER#<orderId> / META
+IDEM#<customerId>#<key> / META
+ORDER#<orderId> / OUTBOX#<eventId>
+```
+
+The outbox publisher reads DynamoDB Streams, publishes `OrderCreated` to
+EventBridge, and deletes the outbox item. If deletion fails, the event may be
+published again; consumers deduplicate by `eventId`.
 
 ## CI/CD
 
@@ -148,6 +165,7 @@ GitHub secrets:
 | `LOG_LEVEL` | `debug`, `info`, `warn`, or `error` |
 | `PORT` | Local HTTP port |
 | `ORDERS_TABLE` | DynamoDB orders table |
+| `EVENT_BUS_NAME` | EventBridge bus for outbox events |
 | `PRODUCT_SERVICE_URL` | Planned Product Service endpoint |
 | `AWS_PROFILE` | Local AWS profile |
 | `AWS_REGION` | AWS region |

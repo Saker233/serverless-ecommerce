@@ -16,6 +16,7 @@ export interface Config {
   logLevel: string;
   port: number;
   ordersTable: string;
+  eventBusName: string;
   productServiceUrl: string;
 }
 
@@ -32,6 +33,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: (env.LOG_LEVEL ?? "info").toLowerCase(),
     port,
     ordersTable: env.ORDERS_TABLE ?? "serverless-ecommerce-dev-orders",
+    eventBusName: env.EVENT_BUS_NAME ?? "serverless-ecommerce-dev-events",
     productServiceUrl: env.PRODUCT_SERVICE_URL ?? "",
   };
 }

@@ -4,7 +4,7 @@ A polyglot, event-driven e-commerce backend built on AWS serverless services.
 
 The project explores how to design, deploy, and operate independently deployable microservices using different runtimes while keeping infrastructure, security, and observability production-oriented.
 
-> **Status:** early development. Product Service CRUD + DynamoDB + CI/CD, the Django User Service profile API + Cognito signup trigger + CI/CD, and the TypeScript Order Service CRUD + DynamoDB + CI/CD are deployed. Cognito authenticates all three APIs. Authorization is intentionally deferred except for order ownership checks.
+> **Status:** early development. Product Service CRUD + DynamoDB + CI/CD, the Django User Service profile API + Cognito signup trigger + CI/CD, and the TypeScript Order Service CRUD + DynamoDB + CI/CD are deployed. The Order Service also has transactional outbox and publisher code, and a Notification Service consumer is implemented. EventBridge/SQS notification infrastructure is not deployed yet. Cognito authenticates all three APIs. Authorization is intentionally deferred except for order ownership checks.
 
 ## Goals
 
@@ -65,7 +65,6 @@ Order events
     ▼
 Amazon EventBridge
     │
-    ├──► SQS ──► Inventory Lambda ──► inventory DB
     └──► SQS ──► Notification Lambda ──► email
 ```
 
@@ -77,9 +76,8 @@ Services never read or write another service's DynamoDB table. Cross-service rea
 |---|---|---|---|
 | Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; Cognito-authenticated writes |
 | User | Python + Django | User profiles | Profile CRUD + DynamoDB + signup trigger + CI/CD |
-| Order | TypeScript + Express | Order lifecycle | CRUD + DynamoDB + idempotency + CI/CD |
-| Inventory | TBD | Stock reservations and movements | Planned |
-| Notification | TBD | Customer notifications | Planned |
+| Order | TypeScript + Express | Order lifecycle | CRUD + DynamoDB + idempotency + outbox + CI/CD |
+| Notification | TypeScript | Customer notifications | SQS consumer code; infrastructure pending |
 
 Cognito owns identity. The User Service owns profile data only.
 
@@ -150,8 +148,12 @@ Cognito access tokens are used for API authorization. API Gateway accepts a toke
 │   │   ├── .env.example
 │   │   ├── package.json
 │   │   └── tsconfig.json
-│   ├── inventory-service/     # planned
-│   └── notification-service/  # planned
+│   └── notification-service/
+│       ├── src/
+│       ├── tests/
+│       ├── .env.example
+│       ├── package.json
+│       └── tsconfig.json
 ├── events/                    # planned event schemas
 ├── infrastructure/            # planned Terraform
 ├── .gitignore
@@ -295,7 +297,7 @@ No long-lived AWS access keys are stored in GitHub. The workflows exchange short
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
 | 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
 | 3 | Cognito authentication *(implemented)*, authorization *(deferred except order ownership)*, Django User Service *(implemented and deployed)*, Order Service *(implemented and deployed)* |
-| 4 | EventBridge, SQS, inventory, notifications, idempotency |
+| 4 | Order outbox/publisher + Notification consumer *(code implemented)*; EventBridge/SQS infrastructure pending |
 | 5 | Terraform for dev and prod, remote state, least-privilege IAM |
 | 6 | Independent pipelines for every service |
 | 7 | Observability, distributed tracing, integration and failure testing |

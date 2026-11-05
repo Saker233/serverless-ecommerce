@@ -6,6 +6,7 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 
+import type { OrderCreatedEvent } from "../events/orderCreated";
 import {
   IdempotencyConflictError,
   type Order,
@@ -42,6 +43,7 @@ export interface OrderRepository {
   create(
     order: Order,
     idempotency: CreateOrderPersistence,
+    event: OrderCreatedEvent,
   ): Promise<CreateOrderResult>;
   get(orderId: string): Promise<Order | null>;
   listByCustomer(
@@ -65,6 +67,7 @@ export class DynamoOrderRepository implements OrderRepository {
   async create(
     order: Order,
     idempotency: CreateOrderPersistence,
+    event: OrderCreatedEvent,
   ): Promise<CreateOrderResult> {
     const orderRecord = {
       PK: `ORDER#${order.orderId}`,
@@ -83,6 +86,12 @@ export class DynamoOrderRepository implements OrderRepository {
       createdAt: idempotency.createdAt,
     };
 
+    const outboxRecord = {
+      PK: `ORDER#${order.orderId}`,
+      SK: `OUTBOX#${event.eventId}`,
+      ...event,
+    };
+
     try {
       await this.client.send(
         new TransactWriteCommand({
@@ -99,6 +108,15 @@ export class DynamoOrderRepository implements OrderRepository {
                 TableName: this.tableName,
                 Item: idempotencyRecord,
                 ConditionExpression: "attribute_not_exists(PK)",
+              },
+            },
+            {
+              Put: {
+                TableName: this.tableName,
+                Item: outboxRecord,
+                // The order item shares the same PK, so uniqueness must be
+                // checked on SK for this outbox item.
+                ConditionExpression: "attribute_not_exists(SK)",
               },
             },
           ],

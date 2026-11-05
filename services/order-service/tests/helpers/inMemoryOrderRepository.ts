@@ -1,3 +1,4 @@
+import type { OrderCreatedEvent } from "../../src/events/orderCreated";
 import {
   IdempotencyConflictError,
   type Order,
@@ -15,10 +16,12 @@ export class InMemoryOrderRepository implements OrderRepository {
     string,
     { orderId: string; requestHash: string }
   >();
+  readonly outboxEvents: OrderCreatedEvent[] = [];
 
   async create(
     order: Order,
     idempotency: CreateOrderPersistence,
+    event: OrderCreatedEvent,
   ): Promise<CreateOrderResult> {
     const key = `${order.customerId}:${idempotency.idempotencyKey}`;
     const existing = this.idempotency.get(key);
@@ -41,6 +44,7 @@ export class InMemoryOrderRepository implements OrderRepository {
       orderId: order.orderId,
       requestHash: idempotency.requestHash,
     });
+    this.outboxEvents.push(event);
 
     return { order, created: true };
   }

@@ -35,10 +35,20 @@ function createOrder(
 
 describe("orders", () => {
   it("creates an order from the token subject", async () => {
-    const { app } = buildTestApp();
+    const { app, repository } = buildTestApp();
     const response = await createOrder(app);
 
     expect(response.status).toBe(201);
+    expect(repository.outboxEvents).toHaveLength(1);
+    expect(repository.outboxEvents[0]).toMatchObject({
+      eventType: "OrderCreated",
+      eventVersion: 1,
+      data: {
+        orderId: response.body.orderId,
+        customerId: "user-1",
+        totalCents: 9998,
+      },
+    });
     expect(response.body).toMatchObject({
       customerId: "user-1",
       status: "PENDING",

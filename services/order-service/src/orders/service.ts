@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { buildOrderCreatedEvent } from "../events/orderCreated";
 import {
   type CreateOrderResult,
   type ListOrdersResult,
@@ -25,6 +26,7 @@ export class OrderService {
     customerId: string,
     input: unknown,
     idempotencyKey: string | undefined,
+    correlationId?: string,
   ): Promise<CreateOrderResult> {
     const normalized = normalizeCreateOrder(input);
     const key = normalizeIdempotencyKey(idempotencyKey);
@@ -43,12 +45,18 @@ export class OrderService {
       updatedAt: timestamp,
     };
 
-    return this.repository.create(order, {
-      idempotencyKey: key,
-      requestHash: hashRequest(normalized),
-      expiresAt: Math.floor(now.getTime() / 1000) + idempotencyTtlSeconds,
-      createdAt: timestamp,
-    });
+    const event = buildOrderCreatedEvent(order, correlationId);
+
+    return this.repository.create(
+      order,
+      {
+        idempotencyKey: key,
+        requestHash: hashRequest(normalized),
+        expiresAt: Math.floor(now.getTime() / 1000) + idempotencyTtlSeconds,
+        createdAt: timestamp,
+      },
+      event,
+    );
   }
 
   async get(customerId: string, orderId: string): Promise<Order> {

@@ -19,6 +19,7 @@ export function ordersRouter(service: OrderService): Router {
         authFrom(res).sub,
         req.body,
         req.header("idempotency-key"),
+        res.locals.requestId as string | undefined,
       );
 
       res.status(result.created ? 201 : 200).json(result.order);
