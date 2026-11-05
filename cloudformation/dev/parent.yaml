@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Full dev environment for the serverless e-commerce platform"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: serverless-ecommerce
+  EnvironmentName:
+    Type: String
+    Default: dev
+  ArtifactBucket:
+    Type: String
+  TemplatePrefix:
+    Type: String
+    Default: cloudformation/dev
+  ProductArtifactKey:
+    Type: String
+    Default: product-service.zip
+  UserArtifactKey:
+    Type: String
+    Default: user-service.zip
+  OrderArtifactKey:
+    Type: String
+    Default: order-service.zip
+  NotificationArtifactKey:
+    Type: String
+    Default: notification-service.zip
+  DjangoSecretKey:
+    Type: String
+    NoEcho: true
+  LogRetentionInDays:
+    Type: Number
+    Default: 7
+  NotificationDryRun:
+    Type: String
+    Default: "true"
+  GitHubOwner:
+    Type: String
+    Default: Saker233
+  GitHubRepo:
+    Type: String
+    Default: serverless-ecommerce
+  GitHubBranch:
+    Type: String
+    Default: main
+
+Resources:
+  IdentityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.${AWS::Region}.amazonaws.com/${ArtifactBucket}/${TemplatePrefix}/identity.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        EnvironmentName: !Ref EnvironmentName
+        ArtifactBucket: !Ref ArtifactBucket
+        UserArtifactKey: !Ref UserArtifactKey
+        DjangoSecretKey: !Ref DjangoSecretKey
+        LogRetentionInDays: !Ref LogRetentionInDays
+        OidcProviderArn: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+        GitHubOwner: !Ref GitHubOwner
+        GitHubRepo: !Ref GitHubRepo
+        GitHubBranch: !Ref GitHubBranch
+
+  PlatformStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.${AWS::Region}.amazonaws.com/${ArtifactBucket}/${TemplatePrefix}/platform.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        EnvironmentName: !Ref EnvironmentName
+
+  ProductStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.${AWS::Region}.amazonaws.com/${ArtifactBucket}/${TemplatePrefix}/product.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        EnvironmentName: !Ref EnvironmentName
+        ArtifactBucket: !Ref ArtifactBucket
+        ProductArtifactKey: !Ref ProductArtifactKey
+        LogRetentionInDays: !Ref LogRetentionInDays
+        Issuer: !Sub
+          - "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}"
+          - UserPoolId: !GetAtt IdentityStack.Outputs.UserPoolId
+        Audience: !GetAtt IdentityStack.Outputs.UserPoolClientId
+        OidcProviderArn: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+        GitHubOwner: !Ref GitHubOwner
+        GitHubRepo: !Ref GitHubRepo
+        GitHubBranch: !Ref GitHubBranch
+
+  OrderStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.${AWS::Region}.amazonaws.com/${ArtifactBucket}/${TemplatePrefix}/order.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        EnvironmentName: !Ref EnvironmentName
+        ArtifactBucket: !Ref ArtifactBucket
+        OrderArtifactKey: !Ref OrderArtifactKey
+        LogRetentionInDays: !Ref LogRetentionInDays
+        Issuer: !Sub
+          - "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}"
+          - UserPoolId: !GetAtt IdentityStack.Outputs.UserPoolId
+        Audience: !GetAtt IdentityStack.Outputs.UserPoolClientId
+        EventBusName: !GetAtt PlatformStack.Outputs.EventBusName
+        EventBusArn: !GetAtt PlatformStack.Outputs.EventBusArn
+        OidcProviderArn: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+        GitHubOwner: !Ref GitHubOwner
+        GitHubRepo: !Ref GitHubRepo
+        GitHubBranch: !Ref GitHubBranch
+
+  NotificationStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.${AWS::Region}.amazonaws.com/${ArtifactBucket}/${TemplatePrefix}/notification.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        EnvironmentName: !Ref EnvironmentName
+        ArtifactBucket: !Ref ArtifactBucket
+        NotificationArtifactKey: !Ref NotificationArtifactKey
+        LogRetentionInDays: !Ref LogRetentionInDays
+        NotificationQueueArn: !GetAtt PlatformStack.Outputs.NotificationQueueArn
+        NotificationDryRun: !Ref NotificationDryRun
+        OidcProviderArn: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+        GitHubOwner: !Ref GitHubOwner
+        GitHubRepo: !Ref GitHubRepo
+        GitHubBranch: !Ref GitHubBranch
+
+Outputs:
+  UserApiEndpoint:
+    Value: !GetAtt IdentityStack.Outputs.UserApiEndpoint
+  UserPoolId:
+    Value: !GetAtt IdentityStack.Outputs.UserPoolId
+  UserPoolClientId:
+    Value: !GetAtt IdentityStack.Outputs.UserPoolClientId
+  ProductApiEndpoint:
+    Value: !GetAtt ProductStack.Outputs.ProductApiEndpoint
+  OrderApiEndpoint:
+    Value: !GetAtt OrderStack.Outputs.OrderApiEndpoint
+  EventBusName:
+    Value: !GetAtt PlatformStack.Outputs.EventBusName
+  NotificationQueueArn:
+    Value: !GetAtt PlatformStack.Outputs.NotificationQueueArn
+  NotificationDLQArn:
+    Value: !GetAtt PlatformStack.Outputs.NotificationDLQArn
+  ProductDeployRoleArn:
+    Value: !GetAtt ProductStack.Outputs.ProductDeployRoleArn
+  UserDeployRoleArn:
+    Value: !GetAtt IdentityStack.Outputs.UserDeployRoleArn
+  OrderDeployRoleArn:
+    Value: !GetAtt OrderStack.Outputs.OrderDeployRoleArn
+  NotificationDeployRoleArn:
+    Value: !GetAtt NotificationStack.Outputs.NotificationDeployRoleArn
+  ProductsTableName:
+    Value: !GetAtt ProductStack.Outputs.ProductsTableName
+  UsersTableName:
+    Value: !GetAtt IdentityStack.Outputs.UsersTableName
+  OrdersTableName:
+    Value: !GetAtt OrderStack.Outputs.OrdersTableName
+  NotificationsTableName:
+    Value: !GetAtt NotificationStack.Outputs.NotificationsTableName

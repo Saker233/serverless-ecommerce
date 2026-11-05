@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Shared EventBridge and SQS resources for the dev environment"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: serverless-ecommerce
+  EnvironmentName:
+    Type: String
+    Default: dev
+
+Resources:
+  EventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-events"
+
+  NotificationDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${EnvironmentName}-notification-dlq"
+      MessageRetentionPeriod: 1209600
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${EnvironmentName}-notification"
+      VisibilityTimeout: 90
+      MessageRetentionPeriod: 1209600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificationDLQ.Arn
+        maxReceiveCount: 5
+
+  OrderCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: order-created-to-notification
+      EventBusName: !Ref EventBus
+      State: ENABLED
+      EventPattern:
+        source:
+          - com.serverless-ecommerce.order
+        detail-type:
+          - OrderCreated
+      Targets:
+        - Id: notification-queue
+          Arn: !GetAtt NotificationQueue.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 5
+            MaximumEventAgeInSeconds: 3600
+
+  NotificationQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref NotificationQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt NotificationQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt OrderCreatedRule.Arn
+
+Outputs:
+  EventBusName:
+    Value: !Ref EventBus
+    Export:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-event-bus-name"
+  EventBusArn:
+    Value: !GetAtt EventBus.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-event-bus-arn"
+  NotificationQueueUrl:
+    Value: !Ref NotificationQueue
+    Export:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-notification-queue-url"
+  NotificationQueueArn:
+    Value: !GetAtt NotificationQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-notification-queue-arn"
+  NotificationDLQUrl:
+    Value: !Ref NotificationDLQ
+    Export:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-notification-dlq-url"
+  NotificationDLQArn:
+    Value: !GetAtt NotificationDLQ.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-notification-dlq-arn"

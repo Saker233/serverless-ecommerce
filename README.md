@@ -4,7 +4,7 @@ A polyglot, event-driven e-commerce backend built on AWS serverless services.
 
 The project explores how to design, deploy, and operate independently deployable microservices using different runtimes while keeping infrastructure, security, and observability production-oriented.
 
-> **Status:** early development. Product Service CRUD + DynamoDB + CI/CD, the Django User Service profile API + Cognito signup trigger + CI/CD, and the TypeScript Order Service CRUD + DynamoDB + CI/CD are deployed. The Order Service also has transactional outbox and publisher code, and a Notification Service consumer is implemented. EventBridge/SQS notification infrastructure is not deployed yet. Cognito authenticates all three APIs. Authorization is intentionally deferred except for order ownership checks.
+> **Status:** application code and CI/CD are implemented for Product, User, Order, and Notification. The manual dev environment was intentionally torn down. The full dev stack is now defined in CloudFormation under `cloudformation/dev/` and can be created with `scripts/deploy-dev.sh`; deployment is pending. Cognito authenticates all three HTTP APIs. Authorization is intentionally deferred except for order ownership checks. Notifications run in dry-run mode.
 
 ## Goals
 
@@ -16,8 +16,6 @@ The project explores how to design, deploy, and operate independently deployable
 - Model DynamoDB around access patterns rather than relational tables.
 
 ## Architecture
-
-### Current
 
 ```text
 Client
@@ -41,43 +39,25 @@ Amazon Cognito
   │       └──► Order Lambda (TypeScript/Express) ──► DynamoDB: orders
   │
   └──► PostConfirmation trigger ──► User trigger Lambda ──► DynamoDB: users
+
+Order Service
+  └──► DynamoDB order + outbox
+          └──► Streams ──► outbox publisher ──► EventBridge
+                                                    └──► SQS
+                                                          └──► Notification Lambda
+                                                                └──► DynamoDB: notifications
 ```
 
-### Target
-
-```text
-Client
-  │
-  ▼
-Amazon Cognito ──► API Gateway HTTP APIs (one per service)
-                        │
-        ┌───────────────┼────────────────┐
-        ▼               ▼                ▼
-   User Lambda     Product Lambda    Order Lambda
-   (Django)        (Go/Gin)          (TypeScript)
-        │               │                │
-        ▼               ▼                ▼
-     users DB       products DB       orders DB
-                                    (DynamoDB)
-
-Order events
-    │
-    ▼
-Amazon EventBridge
-    │
-    └──► SQS ──► Notification Lambda ──► email
-```
-
-Services never read or write another service's DynamoDB table. Cross-service reads use HTTP; side effects use events.
+Services never read or write another service's DynamoDB table. Cross-service reads use HTTP; side effects use events. The Notification Lambda currently runs in dry-run mode and does not call SES.
 
 ## Services
 
 | Service | Runtime | Responsibility | Status |
 |---|---|---|---|
-| Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; Cognito-authenticated writes |
-| User | Python + Django | User profiles | Profile CRUD + DynamoDB + signup trigger + CI/CD |
-| Order | TypeScript + Express | Order lifecycle | CRUD + DynamoDB + idempotency + outbox + CI/CD |
-| Notification | TypeScript | Customer notifications | SQS consumer code; infrastructure pending |
+| Product | Go + Gin | Product catalog, pricing, categories | CRUD + DynamoDB + CI/CD; CloudFormation-defined |
+| User | Python + Django | User profiles | Profile CRUD + DynamoDB + signup trigger + CI/CD; CloudFormation-defined |
+| Order | TypeScript + Express | Order lifecycle | CRUD + DynamoDB + idempotency + outbox + CI/CD; CloudFormation-defined |
+| Notification | TypeScript | Customer notifications | SQS consumer + deduplication + dry-run sender; CloudFormation-defined |
 
 Cognito owns identity. The User Service owns profile data only.
 
@@ -114,7 +94,7 @@ Cognito access tokens are used for API authorization. API Gateway accepts a toke
 | Identity | Amazon Cognito |
 | Events | EventBridge, SQS, DLQs |
 | Observability | CloudWatch Logs, metrics, alarms |
-| Infrastructure | Manual dev setup now, Terraform planned |
+| Infrastructure | CloudFormation for dev; Terraform planned |
 | CI/CD | GitHub Actions, GitHub OIDC, scoped IAM roles |
 
 ## Repository structure
@@ -146,15 +126,29 @@ Cognito access tokens are used for API authorization. API Gateway accepts a toke
 │   ├── order-service/
 │   │   ├── src/
 │   │   ├── tests/
+│   │   ├── scripts/
 │   │   ├── .env.example
 │   │   ├── package.json
 │   │   └── tsconfig.json
 │   └── notification-service/
 │       ├── src/
 │       ├── tests/
+│       ├── scripts/
 │       ├── .env.example
 │       ├── package.json
 │       └── tsconfig.json
+├── cloudformation/
+│   └── dev/
+│       ├── bootstrap.yaml
+│       ├── parent.yaml
+│       ├── identity.yaml
+│       ├── platform.yaml
+│       ├── product.yaml
+│       ├── order.yaml
+│       └── notification.yaml
+├── scripts/
+│   ├── deploy-dev.sh
+│   └── teardown-dev.sh
 ├── events/                    # planned event schemas
 ├── infrastructure/            # planned Terraform
 ├── .gitignore
@@ -166,9 +160,11 @@ Cognito access tokens are used for API authorization. API Gateway accepts a toke
 ### Prerequisites
 
 - Go 1.26+
-- Python 3.12+ recommended (Django base)
+- Python 3.12+ recommended
+- Node.js 22+
 - AWS CLI v2 is recommended for deployments
-- `git`, `zip`, `unzip`, `curl`
+- `git`, `zip`, `unzip`, `curl`, `jq`
+- `gh` for GitHub secret updates (optional)
 - An AWS account for deployment
 
 ### Run the Product Service locally
@@ -259,18 +255,87 @@ The User Service API Lambda handler is `user_service.handler.handler`, and the C
 
 ## Deployment
 
-The current development deployment uses:
+The dev environment is fully defined in CloudFormation:
 
-- Product Lambda and Product API Gateway HTTP API
-- User Lambda and User API Gateway HTTP API
-- Order Lambda and Order API Gateway HTTP API
-- Cognito PostConfirmation trigger Lambda for user profiles
-- DynamoDB tables for products, users, and orders
-- CloudWatch Logs with short retention
-- Scoped IAM execution roles
-- ZIP artifacts for the Go binary, Python package, and Node.js package
+```text
+cloudformation/dev/
+├── bootstrap.yaml       # S3 artifact bucket
+├── parent.yaml          # nested stack orchestration
+├── identity.yaml        # Cognito, profiles, user API, signup trigger
+├── platform.yaml        # EventBridge, notification SQS, DLQ
+├── product.yaml         # products table, Lambda, API
+├── order.yaml           # orders table, API, outbox publisher
+└── notification.yaml    # notifications table, SQS consumer
+```
 
-Infrastructure is provisioned manually for now. It will move to Terraform so that development and production environments are reproducible.
+It creates:
+
+- Cognito user pool, app client, groups, and PostConfirmation trigger
+- Product, User, Order, and Notification Lambdas
+- Three API Gateway HTTP APIs and JWT authorizers
+- Four DynamoDB tables
+- EventBridge bus, rule, SQS queue, and DLQ
+- Lambda event source mappings
+- Scoped IAM execution and GitHub OIDC deploy roles
+- CloudWatch log groups
+
+### One-command dev deployment
+
+The wrapper script handles the full flow:
+
+```bash
+bash scripts/deploy-dev.sh
+```
+
+It:
+
+1. Builds the four Lambda packages.
+2. Deploys the bootstrap stack for the S3 artifact bucket.
+3. Uploads templates and packages.
+4. Deploys the parent stack with nested stacks.
+5. Creates/updates the admin and customer Cognito users.
+6. Updates the GitHub Actions API URL and role secrets.
+7. Runs health checks.
+
+Useful flags:
+
+```bash
+bash scripts/deploy-dev.sh --skip-build
+bash scripts/deploy-dev.sh --skip-users --skip-secrets
+bash scripts/deploy-dev.sh --skip-tests
+```
+
+Optional inputs:
+
+```text
+ARTIFACT_BUCKET
+DJANGO_SECRET_KEY
+ADMIN_EMAIL / ADMIN_PASSWORD
+CUSTOMER_EMAIL / CUSTOMER_PASSWORD
+NOTIFICATION_DRY_RUN
+LOG_RETENTION_IN_DAYS
+```
+
+The Django secret is passed as a CloudFormation `NoEcho` parameter and generated by the script when unset. It should move to SSM Parameter Store or Secrets Manager before production.
+
+### Teardown
+
+For a manual environment, use:
+
+```bash
+bash scripts/teardown-dev.sh --dry-run
+bash scripts/teardown-dev.sh
+```
+
+After CloudFormation is deployed, use CloudFormation instead:
+
+```bash
+aws cloudformation delete-stack --stack-name serverless-ecommerce-dev
+```
+
+The manual teardown script intentionally refuses to run when a matching CloudFormation stack exists.
+
+Terraform remains the planned production IaC path.
 
 ## CI/CD
 
@@ -302,10 +367,10 @@ No long-lived AWS access keys are stored in GitHub. The workflows exchange short
 |---|---|
 | 1 | Product `/health`, Lambda, API Gateway, CI/CD |
 | 2 | Product DynamoDB CRUD, pagination, conditional writes *(implemented)* |
-| 3 | Cognito authentication *(implemented)*, authorization *(deferred except order ownership)*, Django User Service *(implemented and deployed)*, Order Service *(implemented and deployed)* |
-| 4 | Order outbox/publisher + Notification consumer + EventBridge/SQS *(implemented and deployed)* |
-| 5 | Terraform for dev and prod, remote state, least-privilege IAM |
-| 6 | Independent pipelines for every service |
+| 3 | Cognito authentication *(implemented)*, authorization *(deferred except order ownership)*, Django User Service *(implemented)*, Order Service *(implemented)*; CloudFormation-defined |
+| 4 | Order outbox/publisher + Notification consumer + EventBridge/SQS *(implemented; CloudFormation-defined)* |
+| 5 | CloudFormation dev stack *(implemented)*; Terraform for dev and prod next |
+| 6 | Independent pipelines for every service *(implemented)* |
 | 7 | Observability, distributed tracing, integration and failure testing |
 
 ## Security notes
@@ -318,6 +383,8 @@ No long-lived AWS access keys are stored in GitHub. The workflows exchange short
 - User profile routes require a Cognito access token.
 - Authorization is intentionally deferred; protected endpoints are development-only.
 - Cognito owns passwords; no service stores credentials.
+- CloudFormation uses a `NoEcho` Django secret parameter for dev; move it to SSM/Secrets Manager before production.
+- Notification delivery is dry-run only; no customer email is sent.
 
 ## License
 

@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Product service Lambda, API, and DynamoDB table"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: serverless-ecommerce
+  EnvironmentName:
+    Type: String
+    Default: dev
+  ArtifactBucket:
+    Type: String
+  ProductArtifactKey:
+    Type: String
+    Default: product-service.zip
+  LogRetentionInDays:
+    Type: Number
+    Default: 7
+  Issuer:
+    Type: String
+  Audience:
+    Type: String
+  OidcProviderArn:
+    Type: String
+  GitHubOwner:
+    Type: String
+    Default: Saker233
+  GitHubRepo:
+    Type: String
+    Default: serverless-ecommerce
+  GitHubBranch:
+    Type: String
+    Default: main
+
+Resources:
+  ProductsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-${EnvironmentName}-products"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: CategoryIndex
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  ProductFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${EnvironmentName}-product"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  ProductRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvironmentName}-product-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${ProductFunctionLogGroup.Arn}:*"
+        - PolicyName: products-table
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:ConditionCheckItem
+                  - dynamodb:TransactWriteItems
+                Resource:
+                  - !GetAtt ProductsTable.Arn
+                  - !Sub "${ProductsTable.Arn}/index/*"
+
+  ProductFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-product"
+      Runtime: provided.al2023
+      Handler: bootstrap
+      Architectures:
+        - arm64
+      Role: !GetAtt ProductRole.Arn
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ProductArtifactKey
+      Timeout: 5
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENV: !Ref EnvironmentName
+          SERVICE_NAME: product-service
+          VERSION: dev
+          LOG_LEVEL: info
+          PRODUCTS_TABLE: !Ref ProductsTable
+
+  ProductApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-product-api"
+      ProtocolType: HTTP
+
+  ProductIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ProductApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ProductFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ProductAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref ProductApi
+      Name: cognito-jwt
+      AuthorizerType: JWT
+      IdentitySource:
+        - "$request.header.Authorization"
+      JwtConfiguration:
+        Issuer: !Ref Issuer
+        Audience:
+          - !Ref Audience
+
+  ProductHealthRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProductApi
+      RouteKey: "GET /health"
+      Target: !Sub "integrations/${ProductIntegration}"
+      AuthorizationType: NONE
+
+  ProductListRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProductApi
+      RouteKey: "GET /products"
+      Target: !Sub "integrations/${ProductIntegration}"
+      AuthorizationType: NONE
+
+  ProductGetRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProductApi
+      RouteKey: "GET /products/{id}"
+      Target: !Sub "integrations/${ProductIntegration}"
+      AuthorizationType: NONE
+
+  ProductCreateRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProductApi
+      RouteKey: "POST /products"
+      Target: !Sub "integrations/${ProductIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ProductAuthorizer
+
+  ProductUpdateRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProductApi
+      RouteKey: "PUT /products/{id}"
+      Target: !Sub "integrations/${ProductIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ProductAuthorizer
+
+  ProductDeleteRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ProductApi
+      RouteKey: "DELETE /products/{id}"
+      Target: !Sub "integrations/${ProductIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ProductAuthorizer
+
+  ProductStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ProductApi
+      StageName: "$default"
+      AutoDeploy: true
+
+  ProductApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ProductFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ProductApi}/*/*"
+
+  ProductDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-actions-product-deploy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref OidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+                  - !Sub "repo:${GitHubOwner}@*/${GitHubRepo}@*:ref:refs/heads/${GitHubBranch}"
+      Policies:
+        - PolicyName: deploy-product
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:UpdateFunctionCode
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                Resource:
+                  - !GetAtt ProductFunction.Arn
+
+Outputs:
+  ProductApiId:
+    Value: !Ref ProductApi
+  ProductApiEndpoint:
+    Value: !Sub "https://${ProductApi}.execute-api.${AWS::Region}.amazonaws.com"
+  ProductFunctionArn:
+    Value: !GetAtt ProductFunction.Arn
+  ProductFunctionName:
+    Value: !Ref ProductFunction
+  ProductsTableName:
+    Value: !Ref ProductsTable
+  ProductDeployRoleArn:
+    Value: !GetAtt ProductDeployRole.Arn

@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Notification SQS consumer and notifications table"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: serverless-ecommerce
+  EnvironmentName:
+    Type: String
+    Default: dev
+  ArtifactBucket:
+    Type: String
+  NotificationArtifactKey:
+    Type: String
+    Default: notification-service.zip
+  LogRetentionInDays:
+    Type: Number
+    Default: 7
+  NotificationQueueArn:
+    Type: String
+  NotificationDryRun:
+    Type: String
+    Default: "true"
+  OidcProviderArn:
+    Type: String
+  GitHubOwner:
+    Type: String
+    Default: Saker233
+  GitHubRepo:
+    Type: String
+    Default: serverless-ecommerce
+  GitHubBranch:
+    Type: String
+    Default: main
+
+Resources:
+  NotificationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-${EnvironmentName}-notifications"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+  NotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${EnvironmentName}-notification"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  NotificationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvironmentName}-notification-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${NotificationFunctionLogGroup.Arn}:*"
+        - PolicyName: notification-consumer
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt NotificationsTable.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueAttributes
+                Resource: !Ref NotificationQueueArn
+
+  NotificationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-notification"
+      Runtime: nodejs22.x
+      Handler: dist/handler.handler
+      Architectures:
+        - arm64
+      Role: !GetAtt NotificationRole.Arn
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref NotificationArtifactKey
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENV: !Ref EnvironmentName
+          SERVICE_NAME: notification-service
+          VERSION: dev
+          LOG_LEVEL: info
+          NODE_ENV: production
+          NOTIFICATION_TABLE: !Ref NotificationsTable
+          NOTIFICATION_DRY_RUN: !Ref NotificationDryRun
+
+  NotificationEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !Ref NotificationQueueArn
+      FunctionName: !Ref NotificationFunction
+      BatchSize: 10
+      MaximumBatchingWindowInSeconds: 5
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+      Enabled: true
+
+  NotificationDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-actions-notification-deploy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref OidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+                  - !Sub "repo:${GitHubOwner}@*/${GitHubRepo}@*:ref:refs/heads/${GitHubBranch}"
+      Policies:
+        - PolicyName: deploy-notification-service
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:UpdateFunctionCode
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                Resource:
+                  - !GetAtt NotificationFunction.Arn
+
+Outputs:
+  NotificationFunctionArn:
+    Value: !GetAtt NotificationFunction.Arn
+  NotificationFunctionName:
+    Value: !Ref NotificationFunction
+  NotificationsTableName:
+    Value: !Ref NotificationsTable
+  NotificationDeployRoleArn:
+    Value: !GetAtt NotificationDeployRole.Arn

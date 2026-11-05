@@ -1,0 +1,378 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Cognito, user profile table, user API, and signup trigger"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: serverless-ecommerce
+  EnvironmentName:
+    Type: String
+    Default: dev
+  ArtifactBucket:
+    Type: String
+  UserArtifactKey:
+    Type: String
+    Default: user-service.zip
+  DjangoSecretKey:
+    Type: String
+    NoEcho: true
+  LogRetentionInDays:
+    Type: Number
+    Default: 7
+  OidcProviderArn:
+    Type: String
+  GitHubOwner:
+    Type: String
+    Default: Saker233
+  GitHubRepo:
+    Type: String
+    Default: serverless-ecommerce
+  GitHubBranch:
+    Type: String
+    Default: main
+
+Resources:
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-${EnvironmentName}-users"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+  UserFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${EnvironmentName}-user"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  UserTriggerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${EnvironmentName}-user-trigger"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  UserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvironmentName}-user-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${UserFunctionLogGroup.Arn}:*"
+        - PolicyName: users-table
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt UsersTable.Arn
+        - PolicyName: cognito-admin-get-user
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminGetUser
+                Resource: !GetAtt UserPool.Arn
+
+  UserTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvironmentName}-user-trigger-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${UserTriggerLogGroup.Arn}:*"
+        - PolicyName: users-table-put
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt UsersTable.Arn
+
+  UserFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-user"
+      Runtime: python3.12
+      Handler: user_service.handler.handler
+      Role: !GetAtt UserRole.Arn
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref UserArtifactKey
+      Timeout: 15
+      MemorySize: 512
+      Environment:
+        Variables:
+          ENV: !Ref EnvironmentName
+          SERVICE_NAME: user-service
+          VERSION: dev
+          LOG_LEVEL: INFO
+          USERS_TABLE: !Ref UsersTable
+          COGNITO_USER_POOL_ID: !Ref UserPool
+          DJANGO_DEBUG: "false"
+          DJANGO_SECRET_KEY: !Ref DjangoSecretKey
+          ALLOWED_HOSTS: "*"
+
+  UserTriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-user-trigger"
+      Runtime: python3.12
+      Handler: user_service.trigger.handler
+      Role: !GetAtt UserTriggerRole.Arn
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref UserArtifactKey
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          ENV: !Ref EnvironmentName
+          SERVICE_NAME: user-trigger
+          VERSION: dev
+          LOG_LEVEL: INFO
+          USERS_TABLE: !Ref UsersTable
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${ProjectName}-${EnvironmentName}-users"
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      MfaConfiguration: "OFF"
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: name
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+      LambdaConfig:
+        PostConfirmation: !GetAtt UserTriggerFunction.Arn
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${ProjectName}-${EnvironmentName}-web"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+      PreventUserExistenceErrors: ENABLED
+      AccessTokenValidity: 15
+      IdTokenValidity: 15
+      RefreshTokenValidity: 7
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  AdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: admins
+      Precedence: 0
+
+  CustomersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: customers
+      Precedence: 10
+
+  UserTriggerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UserTriggerFunction
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  UserApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-user-api"
+      ProtocolType: HTTP
+
+  UserIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref UserApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt UserFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  UserAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref UserApi
+      Name: cognito-jwt-user
+      AuthorizerType: JWT
+      IdentitySource:
+        - "$request.header.Authorization"
+      JwtConfiguration:
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+        Audience:
+          - !Ref UserPoolClient
+
+  UserHealthRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref UserApi
+      RouteKey: "GET /health"
+      Target: !Sub "integrations/${UserIntegration}"
+      AuthorizationType: NONE
+
+  UserMeGetRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref UserApi
+      RouteKey: "GET /users/me"
+      Target: !Sub "integrations/${UserIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref UserAuthorizer
+
+  UserMePutRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref UserApi
+      RouteKey: "PUT /users/me"
+      Target: !Sub "integrations/${UserIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref UserAuthorizer
+
+  UserDetailRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref UserApi
+      RouteKey: "GET /users/{sub}"
+      Target: !Sub "integrations/${UserIntegration}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref UserAuthorizer
+
+  UserStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref UserApi
+      StageName: "$default"
+      AutoDeploy: true
+
+  UserApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UserFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${UserApi}/*/*"
+
+  UserDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-actions-user-deploy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref OidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepo}:ref:refs/heads/${GitHubBranch}"
+                  - !Sub "repo:${GitHubOwner}@*/${GitHubRepo}@*:ref:refs/heads/${GitHubBranch}"
+      Policies:
+        - PolicyName: deploy-user-service
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:UpdateFunctionCode
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                Resource:
+                  - !GetAtt UserFunction.Arn
+                  - !GetAtt UserTriggerFunction.Arn
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  UserApiId:
+    Value: !Ref UserApi
+  UserApiEndpoint:
+    Value: !Sub "https://${UserApi}.execute-api.${AWS::Region}.amazonaws.com"
+  UserFunctionArn:
+    Value: !GetAtt UserFunction.Arn
+  UserFunctionName:
+    Value: !Ref UserFunction
+  UserTriggerFunctionArn:
+    Value: !GetAtt UserTriggerFunction.Arn
+  UserTriggerFunctionName:
+    Value: !Ref UserTriggerFunction
+  UsersTableName:
+    Value: !Ref UsersTable
+  UserDeployRoleArn:
+    Value: !GetAtt UserDeployRole.Arn
